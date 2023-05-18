@@ -1,0 +1,450 @@
+---
+title: "trattare dati mancanti"
+author: "Emanuele Iaccarino"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+library(ggplot2)
+library(zoo)
+data("EuStockMarkets")
+
+```
+
+```{r}
+EuStockMarkets<- as.data.frame(EuStockMarkets)
+EuStockMarkets.clean=EuStockMarkets
+set.seed(2)
+# Seleziona casualmente il 20% delle osservazioni della variabile "CAC"
+n_obs <- length(EuStockMarkets$CAC)
+obs_to_replace <- sample(1:n_obs, round(n_obs * 0.2))
+# Imposta i valori nella colonna "CAC" corrispondenti alle osservazioni selezionate a NA
+sorted_values <- sort(obs_to_replace)
+EuStockMarkets$CAC[obs_to_replace] <- NA
+rows_to_replace <- which(rowSums(is.na(EuStockMarkets)) > 0)
+
+EuStockMarkets
+EuStockMarkets_splitted=EuStockMarkets.clean$CAC[sorted_values]
+EuStockMarkets_splitted=as.data.frame(EuStockMarkets_splitted)
+# visualizzo i dati
+plot(EuStockMarkets_splitted$EuStockMarkets_splitted, type = "l", xlab = "Data", ylab = "CAC", main = "Grafico dell'andamento di EuStockMarkets")
+
+```
+
+```{r}
+# Conta il numero di dati mancanti per ogni variabile
+colSums(is.na(EuStockMarkets))
+```
+partiamo dal metodo piu semplice, l'imputazione tramite la media(stesso metodo per moda e mediana)
+#impute.mean() o impute.median() dal pacchetto Hmisc
+```{r }
+media_EuStockMarkets=EuStockMarkets
+# Ciclo for per sostituire i valori mancanti con la media dei valori non mancanti
+for (colonna in colnames(media_EuStockMarkets)) {
+  media <- mean(EuStockMarkets[, colonna], na.rm = TRUE) # Calcolo della media
+  media_EuStockMarkets[, colonna][is.na(media_EuStockMarkets[, colonna])] <- media # Sostituzione dei valori mancanti con la media
+}
+# Calcolo dell'RMSE tra il dataset di test originale e il dataset imputato con media
+n <- nrow(EuStockMarkets)
+rmse_media <- sqrt(sum((EuStockMarkets.clean$CAC -  media_EuStockMarkets$CAC)^2) / n)
+rmse_media
+
+
+EuStockMarkets_splitted_media <- media_EuStockMarkets[rows_to_replace,]
+# Creazione del grafico
+plot(EuStockMarkets_splitted$EuStockMarkets_splitted, type = "l", xlab = "Data", ylab = "CAC", main = "Confronto tra EuStockMarkets_splitted e EuStockMarkets_splitted_media")
+
+# Aggiunta della linea del dataset EuStockMarkets_splitted_media
+lines(EuStockMarkets_splitted_media$CAC , col = "red")
+
+# Aggiunta della legenda
+legend("topleft", legend = c("Dati Reali", "imputazione con media"), col = c("black", "red"), lty = 1)
+
+```
+#il problema principale del sostituire la media è che andiamo ad abbattere la varianza, inoltre nel nostro caso non si adatta per niente ai dati
+
+proviamo a rimuovere direttamente le righe con valori mancanti per vedere che succede
+```{r}
+# Rimuovi le righe con valori mancanti
+EuStockMarkets_no_na <- na.omit(EuStockMarkets)
+```
+#eliminare i dati in questo modo porta una perdita di informazione e un aumento del bias(in quanto i dati non vengono rimossi in modo randomico)
+
+posso provare a sostituire i valori mancanti con 0 
+#in questo caso non ha senso,è utile invece se si parla di variabili categoriche: lascio il codice a scopo informativo
+```{r}
+# Sostituisci i valori mancanti con 0
+EuStockMarkets_zero <- replace(EuStockMarkets, is.na(EuStockMarkets), 0)
+# Calcolo dell'RMSE tra il dataset di test originale e il dataset imputato con 0
+n <- nrow(EuStockMarkets)
+rmse_0 <- sqrt(sum((EuStockMarkets.clean$CAC -  EuStockMarkets_zero$CAC)^2) / n)
+rmse_0
+```
+
+utilizzare i valori successivi (next observation carried forward)), ha senso in questo caso perchè è una serie storica, si potrebbe fare lo stesso ragionamento per la backward
+#Questo metodo consiste nel sostituire i valori mancanti con il valore dell'osservazione successiva. Questo metodo è utile se i dati mancanti sono intermittenti(acquisiti in modo irregolare nel tempo) e non ci sono grandi variazioni nella serie storica.
+```{r}
+library(zoo)
+EuStockMarkets_forward=EuStockMarkets
+# Ciclo while per sostituire i valori mancanti con il valore successivo nella colonna "CAC", se anche quello è mancante passa al successivo
+i <- 1
+while (i <= nrow(EuStockMarkets_forward)) {
+  if (is.na(EuStockMarkets_forward$CAC[i])) {
+    j <- i + 1
+    while (is.na(EuStockMarkets_forward$CAC[j]) && j <= nrow(EuStockMarkets_forward)) {
+      j <- j + 1
+    }
+    if (j <= nrow(EuStockMarkets_forward)) {
+      EuStockMarkets_forward$CAC[i] <- EuStockMarkets_forward$CAC[j]
+    } else {
+      break
+    }
+  }
+  i <- i + 1
+}
+
+#ancora piu semplicemente si puo usare EuStockMarkets_forward <- na.locf(EuStockMarkets) che è una funzione del pacchetto zoo
+# Calcolo dell'RMSE tra il dataset di test originale e il dataset imputato con forward
+n <- nrow(EuStockMarkets)
+rmse_forward <- sqrt(sum((EuStockMarkets.clean$CAC -  EuStockMarkets_forward$CAC)^2) / n)
+rmse_forward
+EuStockMarkets_splitted_forward <- EuStockMarkets_forward[rows_to_replace,]
+# Creazione del grafico
+plot(EuStockMarkets_splitted$EuStockMarkets_splitted, type = "l", xlab = "Data", ylab = "CAC", main = "Confronto tra EuStockMarkets e EuStockMarkets_forward")
+
+lines(EuStockMarkets_splitted_forward$CAC, col = "red")
+
+# Aggiunta della legenda
+legend("topleft", legend = c("Dati Reali", "Dati Forward"), col = c("black", "red"), lty = 1)
+```
+usiamo il KNN
+#qui di seguito mostro il codice per il KNN completo, stimando il paramentro di tuning tramite CV: non l'ho potuto usare per l'analisi perchè troppo complesso dal punto di vista computazionale
+
+# Definisco la funzione per il calcolo della distanza euclidea
+euclidean_distance <- function(x1, x2) {
+  sqrt(sum((x1 - x2)^2, na.rm = TRUE))
+}
+
+# Definisco la funzione per riempire i valori mancanti con KNN
+knn_impute <- function(data, k) {
+# Trovo gli indici dei valori mancanti
+  missing <- which(is.na(data), arr.ind = TRUE)
+  
+# Utilizzo KNN per riempire i valori mancanti
+  for (i in 1:nrow(missing)) {
+    # Estraggo la riga con valori mancanti
+    row_missing <- data[missing[i, 1], ]
+    
+# Calcolo la distanza euclidea tra la riga con i valori mancanti e tutte le altre righe
+  distances <- apply(data, 1, euclidean_distance, x2 = row_missing)
+    
+# Trovo i KNN
+  neighbors <- data[order(distances)[2:(k + 1)], ]
+    
+# Calcolo la media dei valori dei KNN per il valore mancante corrente
+  data[missing[i, 1], missing[i, 2]] <- mean(neighbors[, missing[i, 2]], na.rm = TRUE)
+  }
+  
+  return(data)
+}
+#Carico il pacchetto "caret" per eseguire la cross-validation
+library(caret)
+
+#Creo la funzione per calcolare l'errore di cross-validation
+knn_cv_error <- function(k) {
+  
+  #Creo il modello KNN con il valore di K corrente
+  knn_model <- train(CAC ~ ., data = EuStockMarkets, method = "knn", trControl = trainControl(method = "cv", number = 5), tuneLength = 10, preProcess = c("center", "scale"), na.action = na.omit, tuneGrid = data.frame(k = k))
+  
+  #Restituisco l'errore di cross-validation
+  return(knn_model$results$RMSE)
+}
+
+#Creo una griglia di valori K da testare
+k_grid <- seq(1, 10, by = 1)
+
+#Calcolo l'errore di cross-validation per ogni valore di K
+cv_errors <- sapply(k_grid, knn_cv_error)
+
+#Trovo il valore di K che minimizza l'errore di cross-validation
+optimal_k <- k_grid[which.min(cv_errors)]
+
+#Utilizzo il valore di K ottimale per riempire i valori mancanti con KNN
+EuStockMarkets_knn <- knn_impute(EuStockMarkets, k = optimal_k)
+#library(VIM)
+#la libreria VIM riassume il KNN con una sola funzione, per info: https://rdrr.io/cran/VIM/man/kNN.html"
+```{r}
+library(caret)
+library(dplyr)
+library(impute)
+library(DMwR)# Divisione del dataset in un set di addestramento e un set di test
+set.seed(123)
+train_data <- EuStockMarkets.clean[-rows_to_replace,]
+test_data <- EuStockMarkets[rows_to_replace,]
+
+# Creazione del modello KNN con cross-validation
+knn_model <- train(CAC ~ ., data = train_data, method = "knn", trControl = trainControl(method = "cv", number = 5), tuneLength = 10, preProcess = c("center", "scale"), na.action = na.omit, tuneGrid = data.frame(k = 1:10))
+
+# Trovare il valore di K che minimizza l'errore di cross-validation
+optimal_k <- knn_model$bestTune$k
+
+# Funzione di imputazione utilizzando KNN
+knn_impute <- function(x, k) {
+  knnImputation(x, k = k)
+}
+
+# Riempimento dei valori mancanti nel dataset di test utilizzando il valore di K ottimale
+imputed_data_knn <- knn_impute(EuStockMarkets, k = optimal_k)
+
+# Calcolo dell'RMSE tra il dataset di test originale e il dataset imputato con KNN
+n <- nrow(EuStockMarkets)
+rmse_knn <- sqrt(sum((EuStockMarkets.clean$CAC - imputed_data_knn$CAC)^2) / n)
+rmse_knn
+
+EuStockMarkets_splitted_knn <- imputed_data_knn[rows_to_replace,]
+# Creazione del grafico
+plot(EuStockMarkets_splitted$EuStockMarkets_splitted, type = "l", xlab = "Data", ylab = "CAC", main = "Confronto tra EuStockMarkets e EuStockMarkets_knn")
+
+lines(EuStockMarkets_splitted_knn$CAC, col = "red")
+
+# Aggiunta della legenda
+legend("topleft", legend = c("Dati Reali", "Dati Knn"), col = c("black", "red"), lty = 1)
+```
+
+#knnImputation() dal pacchetto DMwR è un altra soluzione altrettanto veloce
+
+utilizzare alberi di decisioni
+```{r}
+library(rpart)
+EuStockMarkets_imputed <- EuStockMarkets
+
+#train con dati non mancanti
+train_data <- EuStockMarkets_imputed[complete.cases(EuStockMarkets_imputed),]
+
+#test con dati mancanti
+test_data <- EuStockMarkets_imputed[!complete.cases(EuStockMarkets_imputed),]
+
+# Creo un modello di albero di decisione 
+tree_model <- rpart(CAC ~ ., data = train_data)
+
+# Utilizza il modello per stimare i valori mancanti nel dataset di valutazione
+test_data$CAC <- predict(tree_model, newdata = test_data)
+
+# Combinare i dataset di addestramento e valutazione
+EuStockMarkets_imputed[!complete.cases(EuStockMarkets_imputed),] <- test_data
+# Calcolo dell'RMSE tra il dataset di test originale e il dataset imputato con decision tree
+n <- nrow(EuStockMarkets)
+rmse_dec_tree <- sqrt(sum((EuStockMarkets.clean$CAC -  EuStockMarkets_imputed$CAC)^2) / n)
+rmse_dec_tree
+
+EuStockMarkets_splitted_dectree <- EuStockMarkets_imputed[rows_to_replace,]
+# Creazione del grafico
+plot(EuStockMarkets_splitted$EuStockMarkets_splitted, type = "l", xlab = "Data", ylab = "CAC", main = "Confronto tra EuStockMarkets e EuStockMarkets_decisiontree")
+
+# Aggiunta della linea del dataset EuStockMarkets_decision tree
+lines(EuStockMarkets_splitted_dectree$CAC, col = "red")
+
+# Aggiunta della legenda
+legend("topleft", legend = c("Dati Reali", "Dati decision tree"), col = c("black", "red"), lty = 1)
+```
+Metodo di sostituzione con la regressione lineare
+#consiste nel utilizzare la regressione lineare per stimare i valori mancanti sulla base dei valori disponibili nella serie storica. Questo metodo è utile se i dati mancanti sono numerosi e c'è relazione tra le variabili
+```{r}
+# Creo un modello di regressione lineare 
+model <- lm(CAC ~ ., data = train_data)
+EuStockMarkets_lm=EuStockMarkets
+# Sostituisci i valori mancanti nella colonna CAC con quelli stimati con LM
+
+for (i in 1:nrow(EuStockMarkets_lm)) {
+  if (is.na(EuStockMarkets_lm$CAC[i])) {
+    EuStockMarkets_lm$CAC[i] <- predict(model, newdata = EuStockMarkets_lm)[i]
+  }
+}
+n <- nrow(EuStockMarkets)
+rmse_lm <- sqrt(sum((EuStockMarkets.clean$CAC -  EuStockMarkets_lm$CAC)^2) / n)
+rmse_lm
+
+EuStockMarkets_splitted_lm <- EuStockMarkets_lm[rows_to_replace,]
+# Creazione del grafico
+plot(EuStockMarkets_splitted$EuStockMarkets_splitted, type = "l", xlab = "Data", ylab = "CAC", main = "Confronto tra EuStockMarkets e EuStockMarkets_lm")
+
+# Aggiunta della linea del dataset EuStockMarkets_decision tree
+lines(EuStockMarkets_splitted_lm$CAC, col = "red")
+
+# Aggiunta della legenda
+legend("topleft", legend = c("Dati Reali", "Dati linear regression"), col = c("black", "red"), lty = 1)
+```
+
+Metodo di sostituzione con la media mobile (moving average imputation)
+#consiste nel sostituire i valori mancanti con la media mobile dei valori disponibili nella serie storica.è utile se la serie storica ha una tendenza o stagionalità
+```{r}
+library(dplyr)
+EuStockMarkets_mm=EuStockMarkets
+# Carica il pacchetto "imputeTS"
+library(imputeTS)
+# Sostituisci i valori una media mobile di ordine 7
+EuStockMarkets_mm$CAC <- na_ma(EuStockMarkets_mm$CAC, k = 7)
+n <- nrow(EuStockMarkets)
+rmse_mmp <- sqrt(sum((EuStockMarkets.clean$CAC -  EuStockMarkets_mm$CAC)^2) / n)
+rmse_mmp
+EuStockMarkets_splitted_mm <- EuStockMarkets_mm[rows_to_replace,]
+# Creazione del grafico
+plot(EuStockMarkets_splitted$EuStockMarkets_splitted, type = "l", xlab = "Data", ylab = "CAC", main = "Confronto tra EuStockMarkets e EuStockMarkets_mm")
+
+# Aggiunta della linea del dataset EuStockMarkets_media mobile
+lines(EuStockMarkets_splitted_mm$CAC, col = "red")
+
+# Aggiunta della legenda
+legend("topleft", legend = c("Dati Reali", "Dati media mobile"), col = c("black", "red"), lty = 1)
+```
+
+imputazione multipla: 
+#consiste nel creare più dataset completi con un metodo brute force
+```{r}
+library(mice)
+# Esegue l'imputazione dei dati mancanti utilizzando la funzione "mice"
+EuStockMarkets_mice <- mice(EuStockMarkets, m = 5, maxit = 50, method = "pmm", seed = 123)
+
+EuStockMarkets_complete <- complete(EuStockMarkets_mice)
+
+n <- nrow(EuStockMarkets)
+rmse_mice <- sqrt(sum((EuStockMarkets.clean$CAC -  EuStockMarkets_complete$CAC)^2) / n)
+rmse_mice
+
+EuStockMarkets_splitted_mice <- EuStockMarkets_complete[rows_to_replace,]
+# Creazione del grafico
+plot(EuStockMarkets_splitted$EuStockMarkets_splitted, type = "l", xlab = "Data", ylab = "CAC", main = "Confronto tra EuStockMarkets e EuStockMarkets_mice")
+
+# Aggiunta della linea del dataset EuStockMarkets_mice
+lines(EuStockMarkets_splitted_mice$CAC, col = "red")
+
+# Aggiunta della legenda
+legend("topleft", legend = c("Dati Reali", "Dati mice LM"), col = c("black", "red"), lty = 1)
+```
+
+```{r}
+library(missForest)
+# Imputazione dei dati mancanti utilizzando "missForest"
+EuStockMarkets_forest<- missForest(EuStockMarkets)
+EuStockMarkets_forest<- as.data.frame(EuStockMarkets_forest$ximp)
+
+# Visualizzazione del dataset imputato
+n <- nrow(EuStockMarkets)
+rmse_forest <- sqrt(sum((EuStockMarkets.clean$CAC -  EuStockMarkets_forest$CAC)^2) / n)
+rmse_forest
+
+EuStockMarkets_splitted_forest <- EuStockMarkets_forest[rows_to_replace,]
+# Creazione del grafico
+plot(EuStockMarkets_splitted$EuStockMarkets_splitted, type = "l", xlab = "Data", ylab = "CAC", main = "Confronto tra EuStockMarkets e EuStockMarkets_forest")
+
+# Aggiunta della linea del dataset EuStockMarkets_forest
+lines(EuStockMarkets_splitted_forest$CAC, col = "red")
+
+# Aggiunta della legenda
+legend("topleft", legend = c("Dati Reali", "Dati forest"), col = c("black", "red"), lty = 1)
+```
+http://www.mat.unimi.it/users/alzati/Geometria_Computazionale_98-99/apps/interpolanti/teoria.html
+
+```{r}
+# Applica l'interpolazione lineare ai dati mancanti utilizzando la funzione 'approx()'
+#è una specie media ponderata alla fine
+library(zoo)
+EuStockMarkets_lin_interp <- na.approx(EuStockMarkets$CAC)
+EuStockMarkets_lin=EuStockMarkets
+EuStockMarkets_lin$CAC <- EuStockMarkets_lin_interp
+
+EuStockMarkets_lin=as.data.frame(EuStockMarkets_lin)
+
+n <- nrow(EuStockMarkets)
+rmse_lin_interp <- sqrt(sum((EuStockMarkets.clean$CAC -  EuStockMarkets_lin$CAC)^2) / n)
+rmse_lin_interp
+
+EuStockMarkets_splitted_lin <- EuStockMarkets_lin[rows_to_replace,]
+# Creazione del grafico
+plot(EuStockMarkets_splitted$EuStockMarkets_splitted, type = "l", xlab = "Data", ylab = "CAC", main = "Confronto tra EuStockMarkets e EuStockMarkets_lin interpoled")
+
+# Aggiunta della linea del dataset EuStockMarkets_lin
+lines(EuStockMarkets_splitted_lin$CAC, col = "red")
+
+# Aggiunta della legenda
+legend("topleft", legend = c("Dati Reali", "Dati linear interpoled"), col = c("black", "red"), lty = 1)
+```
+```{r}
+# Applica l'interpolazione con spline cubica ai dati mancanti utilizzando la funzione 'na.spline()'
+library(zoo)
+EuStockMarkets_spline_interp <- na.spline(EuStockMarkets$CAC)
+EuStockMarkets_spline=EuStockMarkets
+EuStockMarkets_spline$CAC <- EuStockMarkets_spline_interp
+EuStockMarkets_spline=as.data.frame(EuStockMarkets_spline)
+
+EuStockMarkets_spline_interp=as.data.frame(EuStockMarkets_spline_interp)
+n <- nrow(EuStockMarkets)
+rmse_spline_interp <- sqrt(sum((EuStockMarkets.clean$CAC -  EuStockMarkets_spline$CAC)^2) / n)
+rmse_spline_interp
+
+EuStockMarkets_splitted_spline <- EuStockMarkets_spline[rows_to_replace,]
+# Creazione del grafico
+plot(EuStockMarkets_splitted$EuStockMarkets_splitted, type = "l", xlab = "Data", ylab = "CAC", main = "Confronto tra EuStockMarkets e EuStockMarkets_spline interpoled")
+
+# Aggiunta della linea del dataset EuStockMarkets_spline
+lines(EuStockMarkets_splitted_spline$CAC, col = "red")
+
+# Aggiunta della legenda
+legend("topleft", legend = c("Dati Reali", "Dati cubic interpoled"), col = c("black", "red"), lty = 1)
+```
+
+```{r}
+
+# Applica l'interpolazione basata su regola ai dati mancanti utilizzando la funzione 'na.approx()'
+library(zoo)
+EuStockMarkets_regola_interp <- na.approx(EuStockMarkets$CAC, method = "constant", rule = 0.5)
+#l'interpolazione verrà effettuata utilizzando una regola che assegna un peso del 50% ai valori precedenti e un peso del 50% ai valori successivi al valore mancante.
+EuStockMarkets_regola=EuStockMarkets
+EuStockMarkets_regola$CAC <- EuStockMarkets_regola_interp
+EuStockMarkets_regola=as.data.frame(EuStockMarkets_regola)
+n <- nrow(EuStockMarkets)
+rmse_regola <- sqrt(sum((EuStockMarkets.clean$CAC -  EuStockMarkets_regola$CAC)^2) / n)
+rmse_regola
+
+EuStockMarkets_splitted_aprox <- EuStockMarkets_regola[rows_to_replace,]
+# Creazione del grafico
+plot(EuStockMarkets_splitted$EuStockMarkets_splitted, type = "l", xlab = "Data", ylab = "CAC", main = "Confronto tra EuStockMarkets e EuStockMarkets_aprox interpoled")
+
+# Aggiunta della linea del dataset EuStockMarkets_aprox
+lines(EuStockMarkets_splitted_aprox$CAC, col = "red")
+
+# Aggiunta della legenda
+legend("topleft", legend = c("Dati Reali", "Dati na.aprox"), col = c("black", "red"), lty = 1)
+```
+
+#visualizziamo graficamente i valori rmse per capire quale possa essere il metodo ottimare di imputazione dei dati nel nostro caso
+```{r}
+rmse_vector <- c(rmse_media, rmse_dec_tree, rmse_forest, rmse_forward, rmse_knn, rmse_lin_interp, rmse_lm, rmse_mice, rmse_mmp, rmse_spline_interp, rmse_regola)
+names_rmse <- c("Media", "Decision Tree", "Random Forest", "Forward Fill", "KNN", "Linear Interpolation", "Linear Regression", "MICE with Linear Model", "Moving Average", "Cubic Interpolation", "Nearest Neighbour Interpolation")
+names(rmse_vector) <- names_rmse
+
+sorted_rmse <- rmse_vector[order(rmse_vector)]
+
+library(ggplot2)
+
+df_rmse <- data.frame(RMSE = sorted_rmse, Method = names(sorted_rmse))
+
+ggplot(df_rmse, aes(x = Method, y = RMSE, fill = Method)) +
+  geom_bar(stat = "identity", width = 0.7) +
+  coord_flip() +
+  labs(title = "Confronto tra RMSE",
+       x = "",
+       y = "RMSE") +geom_text(aes(label = round(RMSE, 3)), hjust = -0.1, size = 4, fontface = "bold") +
+  theme_bw() +
+  theme(plot.title = element_text(size = 20, face = "bold"),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        axis.text.y = element_text(size = 14),
+        axis.title = element_text(size = 16),
+        legend.position = "none")
+
+```
+
+
