@@ -1,0 +1,253 @@
+---
+title: "trattare dati mancanti"
+author: "Emanuele Iaccarino"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+data("airquality")
+View(airquality)
+library(ggplot2)
+```
+
+```{r}
+# Conta il numero di dati mancanti per ogni variabile
+colSums(is.na(airquality))
+```
+
+#impute.mean() o impute.median() dal pacchetto Hmisc
+```{r }
+# Rimozione delle righe con più di 3 valori mancanti
+airquality <- airquality[rowSums(is.na(airquality)) <= 3,]
+#metodo per rimuovere alcune righe quando ci sono troppi valori mancanti, nel nostro caso non verrà rimosso nulla
+media_airquality=airquality
+# Ciclo for per sostituire i valori mancanti con la media dei valori non mancanti
+for (colonna in colnames(media_airquality)) {
+  media <- mean(airquality[, colonna], na.rm = TRUE) # Calcolo della media
+  media_airquality[, colonna][is.na(media_airquality[, colonna])] <- media # Sostituzione dei valori mancanti con la media
+}
+
+#visualizziamo come si comporta la nostra variabile di maggior interesse giorno dopo giorno
+ggplot(media_airquality, aes(x = Day, y = Ozone)) +
+  geom_line() +
+  facet_wrap(~ Month, nrow = 2) +
+  labs(x = "Day", y = "Ozone") +
+  ggtitle("Ozone concentration by day and month")
+
+```
+#il problema principale del sostituire la media è che andiamo ad abbattere la varianza
+#proviamo a rimuovere direttamente le righe con valori mancanti
+```{r}
+# Rimuovi le righe con valori mancanti
+airquality_no_na <- na.omit(airquality)
+#visualizziamo come si comporta la nostra variabile di maggior interesse giorno dopo giorno
+ggplot(airquality_no_na, aes(x = Day, y = Ozone)) +
+  geom_line() +
+  facet_wrap(~ Month, nrow = 2) +
+  labs(x = "Day", y = "Ozone") +
+  ggtitle("Ozone concentration by day and month")
+```
+#eliminare i dati in questo modo porta una perdita di informazione e un aumento del bias(in quanto i dati non vengono rimossi in modo randomico)
+#posso provare a sostituire i valori mancanti con 0 ma in questo caso non ha senso,è utile invece se si parla di variabili categoriche: lascio il codice a scopo informativo
+```{r}
+# Sostituisci i valori mancanti con 0
+airquality_zero <- replace(airquality, is.na(airquality), 0)
+#visualizziamo come si comporta la nostra variabile di maggior interesse giorno dopo giorno
+ggplot(airquality_zero, aes(x = Day, y = Ozone)) +
+  geom_line() +
+  facet_wrap(~ Month, nrow = 2) +
+  labs(x = "Day", y = "Ozone") +
+  ggtitle("Ozone concentration by day and month")
+```
+
+#utilizzare i valori successivi, ha senso in questo caso perchè è una serie storica, si potrebbe fare lo stesso ragionamento per la backward
+```{r}
+# Sostituisci i valori mancanti con i valori successivi non mancanti
+library(zoo)
+airquality_forward <- na.locf(airquality, na.rm = FALSE)
+
+#visualizziamo come si comporta la nostra variabile di maggior interesse giorno dopo giorno
+ggplot(airquality_forward, aes(x = Day, y = Ozone)) +
+  geom_line() +
+  facet_wrap(~ Month, nrow = 2) +
+  labs(x = "Day", y = "Ozone") +
+  ggtitle("Ozone concentration by day and month")
+```
+#ancora meglio usare il KNN in questi casi. ho avuto problemi con le library per via della versione di R quindi ho dovuto usare il codice completo creato con Iodice. ho stimato il parametro di tuning via CV
+```{r}
+# Definisco la funzione per il calcolo della distanza euclidea
+euclidean_distance <- function(x1, x2) {
+  sqrt(sum((x1 - x2)^2, na.rm = TRUE))
+}
+
+# Definisco la funzione per riempire i valori mancanti con KNN
+knn_impute <- function(data, k) {
+  # Trovo gli indici dei valori mancanti
+  missing <- which(is.na(data), arr.ind = TRUE)
+  
+  # Utilizzo KNN per riempire i valori mancanti
+  for (i in 1:nrow(missing)) {
+    # Estraggo la riga con valori mancanti
+    row_missing <- data[missing[i, 1], ]
+    
+    # Calcolo la distanza euclidea tra la riga con i valori mancanti e tutte le altre righe
+    distances <- apply(data, 1, euclidean_distance, x2 = row_missing)
+    
+    # Trovo i KNN
+    neighbors <- data[order(distances)[2:(k + 1)], ]
+    
+    # Calcolo la media dei valori dei KNN per il valore mancante corrente
+    data[missing[i, 1], missing[i, 2]] <- mean(neighbors[, missing[i, 2]], na.rm = TRUE)
+  }
+  
+  return(data)
+}
+#Carico il pacchetto "caret" per eseguire la cross-validation
+library(caret)
+
+#Creo la funzione per calcolare l'errore di cross-validation
+knn_cv_error <- function(k) {
+  
+  #Creo il modello KNN con il valore di K corrente
+  knn_model <- train(Ozone ~ ., data = airquality, method = "knn", trControl = trainControl(method = "cv", number = 5), tuneLength = 10, preProcess = c("center", "scale"), na.action = na.omit, tuneGrid = data.frame(k = k))
+  
+  #Restituisco l'errore di cross-validation
+  return(knn_model$results$RMSE)
+}
+
+#Creo una griglia di valori K da testare
+k_grid <- seq(1, 10, by = 1)
+
+#Calcolo l'errore di cross-validation per ogni valore di K
+cv_errors <- sapply(k_grid, knn_cv_error)
+
+#Trovo il valore di K che minimizza l'errore di cross-validation
+optimal_k <- k_grid[which.min(cv_errors)]
+
+#Utilizzo il valore di K ottimale per riempire i valori mancanti con KNN
+airquality_knn <- knn_impute(airquality, k = optimal_k)
+
+#visualizziamo come si comporta la nostra variabile di maggior interesse giorno dopo giorno
+ggplot(airquality_knn, aes(x = Day, y = Ozone)) +
+  geom_line() +
+  facet_wrap(~ Month, nrow = 2) +
+  labs(x = "Day", y = "Ozone") +
+  ggtitle("Ozone concentration by day and month")
+```
+#knnImputation() dal pacchetto DMwR. soluzione veloce ma comunque pesante dal punto di vista computazionale, personalmente preferisco sempre creare il codice da capo perchè lo adatti meglio ai dati essendo personalizzabile
+```{r}
+
+```
+
+#utilizzare alberi di decisioni: ha senso solo se c'è una relazione tra le variabili: in questo caso ho stimato gli Na di ozone usando la relazione con le altri variabili: si ha qualche valore meno significativo nei casi in cui ci sia un valore mancante anche in Sole.R
+```{r}
+library(rpart)
+airquality_imputed <- airquality
+
+#train con dati non mancanti
+train_data <- airquality_imputed[complete.cases(airquality_imputed),]
+
+#test con dati mancanti
+test_data <- airquality_imputed[!complete.cases(airquality_imputed),]
+
+# Creo un modello di albero di decisione 
+tree_model <- rpart(Ozone ~ Solar.R + Wind + Temp, data = train_data)
+
+# Utilizza il modello per stimare i valori mancanti nel dataset di valutazione
+test_data$Ozone <- predict(tree_model, newdata = test_data)
+
+# Combinare i dataset di addestramento e valutazione
+airquality_imputed[!complete.cases(airquality_imputed),] <- test_data
+
+#visualizziamo come si comporta la nostra variabile di maggior interesse giorno dopo giorno
+ggplot(airquality_imputed, aes(x = Day, y = Ozone)) +
+  geom_line() +
+  facet_wrap(~ Month, nrow = 2) +
+  labs(x = "Day", y = "Ozone") +
+  ggtitle("Ozone concentration by day and month")
+```
+
+#visualizziamo graficamente la varianza della nostra variabile di interesse con i vari metodi utilizzati nel trattamento dei dati mancanti
+```{r}
+df <- data.frame(
+  Method = c("Forward", "No NA", "Mean","Tree","KNN"),
+  Ozone = c(var(airquality_forward$Ozone), var(airquality_no_na$Ozone), var(media_airquality$Ozone),var(airquality_imputed$Ozone),var(airquality_knn$Ozone))
+)
+
+# Creo un grafico a barre con ggplot
+ggplot(df, aes(x = Method, y = Ozone, fill = Method)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Metodo", y = "Varianza dell'ozono") +
+  ggtitle("Compariamo i modi di gestire i dati mancanti")
+```
+#come detto prima usare la media tende a diminuire troppo la varianza. I metodi migliori risultano essere il KNN e gli alberi di decisione
+
+#utilizziamo un altro metodo per confrontare i nostri risultati, ovvero l'errore computazionale: ho rimosso casualmente dal mio dataset 20 dati di cui conoscevo effettivamente il valore e ho usato 3 metodi per il trattamento di dati mancanti (media,knn e albero di decisione) per valutare quale riesca a stimare effettivamente meglio i dati mancanti tramite la differenza assoluta tra i valori mancanti stimati e i valori mancanti effettivi.
+
+```{r}
+airquality_imputed <- airquality
+
+# Rimuovi alcune osservazioni per creare dati mancanti
+set.seed(123)
+missing_index <- sample(nrow(airquality_imputed), 20)
+airquality_imputed[missing_index, "Ozone"] <- NA
+
+# Imputazione dei dati mancanti utilizzando il metodo della media
+airquality_imputed_mean <- airquality_imputed
+airquality_imputed_mean$Ozone <- ifelse(is.na(airquality_imputed_mean$Ozone), mean(airquality_imputed_mean$Ozone, na.rm = TRUE), airquality_imputed_mean$Ozone)
+# Imputazione dei dati mancanti utilizzando il metodo Albero di decisione
+library(rpart)
+airquality_imputed_tree <- airquality_imputed
+tree_model <- rpart(Ozone ~ Solar.R + Wind + Temp, data = airquality_imputed_tree, method = "anova")
+airquality_imputed_tree$Ozone <- predict(tree_model, newdata = airquality_imputed_tree)
+# Imputazione dei dati mancanti utilizzando il metodo KNN
+library(VIM)
+#la libreria VIM riassume il KNN con una sola funzione, per info: https://rdrr.io/cran/VIM/man/kNN.html"
+airquality_imputed_knn <- kNN(airquality_imputed, variable = "Ozone")
+
+# Calcola l'errore di imputazione per ciascun metodo di imputazione
+error_imputation_mean <- mean(abs(airquality_imputed_mean$Ozone[missing_index] - airquality$Ozone[missing_index]), na.rm = TRUE)
+error_imputation_median <- error_imputation_tree <- mean(abs(airquality_imputed_tree$Ozone[missing_index] - airquality$Ozone[missing_index]), na.rm = TRUE)
+error_imputation_knn <- mean(abs(airquality_imputed_knn$Ozone[missing_index] - airquality$Ozone[missing_index]), na.rm = TRUE)
+
+# Visualizza l'errore di imputazione per ciascun metodo di imputazione
+print(paste("Errore di imputazione con il metodo della media:", error_imputation_mean))
+print(paste("Errore di imputazione con il metodo Albero di decisione:", error_imputation_tree))
+print(paste("Errore di imputazione con il metodo KNN:", error_imputation_knn))
+# Creazione del dataset con i risultati delle diverse tecniche di imputazione
+error_imputation <- c(error_imputation_mean, error_imputation_tree,error_imputation_knn )
+technique <- c("Media", "Albero di decisione", "KNN")
+results <- data.frame(error_imputation, technique)
+
+# Creazione del grafico a barre
+library(ggplot2)
+ggplot(results, aes(x = technique, y = error_imputation, fill = technique)) + 
+  geom_bar(stat = "identity") +
+  ggtitle("Errore di imputazione per diverse tecniche") +
+  xlab("Tecnica di imputazione") +
+  ylab("Errore di imputazione") +
+  theme_minimal()
+```
+#confermiamo che KNN e Alberi di decisioni sono i metodi migliori, probabilmente nel nostro caso specifico è leggermente migliore l'albero perchè le nostre variabili sono legate tra loro da qualche tipo di relazione
+```{r}
+# Carica il pacchetto "mice"
+library(mice)
+install.packages("mira")
+# Carica il pacchetto "mira"
+library(mira)
+
+# Carica il dataset "airquality"
+data(airquality)
+
+# Imposta il seed per la riproducibilità dei risultati
+set.seed(123)
+
+# Esegue l'imputazione dei dati mancanti utilizzando la funzione "mice"
+airquality_imputed <- mice(airquality, m = 5, maxit = 50, method = "pmm", seed = 123)
+
+# Esegue un'analisi di regressione lineare sui dati imputati utilizzando la funzione "with()" del pacchetto "mira"
+airquality_reg <- with(airquality_imputed, lm(Ozone ~ Solar.R + Wind + Temp))
+summary(airquality_reg)
+```
